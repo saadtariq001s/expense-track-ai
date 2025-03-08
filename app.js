@@ -50,6 +50,7 @@ const User = mongoose.model('User', userSchema);
 const expenseSchema = new mongoose.Schema({
   userId: { type: mongoose.Schema.Types.ObjectId, ref: 'User', required: true },
   amount: { type: Number, required: true },
+  currency: { type: String, default: 'PKR' }, // Added currency field
   description: { type: String, required: true },
   date: { type: Date, default: Date.now },
   category: { type: String },
@@ -228,20 +229,41 @@ app.post('/api/expenses', ensureAuthenticated, async (req, res) => {
   }
 });
 
-app.get('/api/expenses', ensureAuthenticated, async (req, res) => {
+// Expense API Endpoints
+app.post('/api/expenses', ensureAuthenticated, async (req, res) => {
   try {
-    const expenses = await Expense.find({ userId: req.user._id }).sort({ date: -1 });
-    res.json(expenses);
+    const { amount, currency, description, date, rawCategory } = req.body;
+    
+    // Categorize the expense using the local function
+    const category = categorizeExpense(description, amount);
+    
+    const expense = new Expense({
+      userId: req.user._id,
+      amount,
+      currency: currency || 'PKR', // Use PKR as default if not provided
+      description,
+      date: date || Date.now(),
+      category,
+      rawCategory
+    });
+    
+    await expense.save();
+    res.status(201).json(expense);
   } catch (error) {
-    console.error('Error fetching expenses:', error);
-    res.status(500).json({ error: 'Failed to fetch expenses' });
+    console.error('Error adding expense:', error);
+    res.status(500).json({ error: 'Failed to add expense' });
   }
 });
 
 app.get('/api/expenses/summary', ensureAuthenticated, async (req, res) => {
   try {
+    const userId = req.user._id;
+    
+    // Convert the string ID to a MongoDB ObjectId
+    const userObjectId = new mongoose.Types.ObjectId(userId);
+    
     const pipeline = [
-      { $match: { userId: mongoose.Types.ObjectId(req.user._id) } },
+      { $match: { userId: userObjectId } },
       { $group: { _id: '$category', total: { $sum: '$amount' } } },
       { $sort: { total: -1 } }
     ];
@@ -256,7 +278,7 @@ app.get('/api/expenses/summary', ensureAuthenticated, async (req, res) => {
 
 app.put('/api/expenses/:id', ensureAuthenticated, async (req, res) => {
   try {
-    const { amount, description, date, rawCategory } = req.body;
+    const { amount, currency, description, date, rawCategory } = req.body;
     
     // Recategorize if description changed
     let category = req.body.category;
@@ -266,7 +288,14 @@ app.put('/api/expenses/:id', ensureAuthenticated, async (req, res) => {
     
     const expense = await Expense.findOneAndUpdate(
       { _id: req.params.id, userId: req.user._id },
-      { amount, description, date, category, rawCategory },
+      { 
+        amount, 
+        currency: currency || 'PKR', // Use PKR as default if not provided
+        description, 
+        date, 
+        category, 
+        rawCategory 
+      },
       { new: true }
     );
     
@@ -299,7 +328,136 @@ app.delete('/api/expenses/:id', ensureAuthenticated, async (req, res) => {
   }
 });
 
+
+app.get('/api/expenses/insights', ensureAuthenticated, async (req, res) => {
+  try {
+    const userId = req.user._id;
+    const userObjectId = new mongoose.Types.ObjectId(userId);
+    
+    // Get all expenses for calculations
+    const expenses = await Expense.find({ userId: userObjectId }).sort({ date: -1 });
+    
+    // If no expenses, return empty insights
+    if (expenses.length === 0) {
+      return res.json({
+        totalSpent: 0,
+        insights: ["No expenses found. Add your first expense to see insights!"]
+      });
+    }
+    
+    // Calculate total spent
+    const totalSpent = expenses.reduce((sum, expense) => sum + expense.amount, 0);
+    
+    // Group by category
+    const categorySums = {};
+    const categoryCount = {};
+    expenses.forEach(expense => {
+      const cat = expense.category || 'Other';
+      if (!categorySums[cat]) {
+        categorySums[cat] = 0;
+        categoryCount[cat] = 0;
+      }
+      categorySums[cat] += expense.amount;
+      categoryCount[cat]++;
+    });
+    
+    // Find top categories
+    const categories = Object.keys(categorySums);
+    categories.sort((a, b) => categorySums[b] - categorySums[a]);
+    const topCategory = categories[0];
+    const topCategoryPercentage = ((categorySums[topCategory] / totalSpent) * 100).toFixed(1);
+    
+    // Calculate month-over-month trends
+    const monthlyData = {};
+    expenses.forEach(expense => {
+      const date = new Date(expense.date);
+      const monthYear = `${date.getFullYear()}-${String(date.getMonth() + 1).padStart(2, '0')}`;
+      
+      if (!monthlyData[monthYear]) {
+        monthlyData[monthYear] = 0;
+      }
+      monthlyData[monthYear] += expense.amount;
+    });
+    
+    // Convert to array and sort
+    const monthlySpending = Object.entries(monthlyData)
+      .map(([month, amount]) => ({ month, amount }))
+      .sort((a, b) => a.month.localeCompare(b.month));
+    
+    // Calculate month-over-month growth if we have at least 2 months of data
+    let monthOverMonthGrowth = null;
+    if (monthlySpending.length >= 2) {
+      const lastMonth = monthlySpending[monthlySpending.length - 1];
+      const previousMonth = monthlySpending[monthlySpending.length - 2];
+      monthOverMonthGrowth = ((lastMonth.amount - previousMonth.amount) / previousMonth.amount) * 100;
+    }
+    
+    // Calculate average transaction size
+    const avgTransactionSize = totalSpent / expenses.length;
+    
+    // Generate insights
+    const insights = [];
+    
+    // Top spending category
+    insights.push(`Your top spending category is "${topCategory}" at ${topCategoryPercentage}% of total expenses.`);
+    
+    // Month-over-month growth insight
+    if (monthOverMonthGrowth !== null) {
+      if (monthOverMonthGrowth > 0) {
+        insights.push(`Your spending increased by ${monthOverMonthGrowth.toFixed(1)}% compared to the previous month.`);
+      } else if (monthOverMonthGrowth < 0) {
+        insights.push(`Your spending decreased by ${Math.abs(monthOverMonthGrowth).toFixed(1)}% compared to the previous month.`);
+      } else {
+        insights.push(`Your spending is the same as the previous month.`);
+      }
+    }
+    
+    // Average transaction size
+    insights.push(`Your average expense amount is ${avgTransactionSize.toFixed(2)}.`);
+    
+    // Recent trend
+    if (monthlySpending.length >= 3) {
+      const last3Months = monthlySpending.slice(-3);
+      const isIncreasing = last3Months[0].amount < last3Months[1].amount && last3Months[1].amount < last3Months[2].amount;
+      const isDecreasing = last3Months[0].amount > last3Months[1].amount && last3Months[1].amount > last3Months[2].amount;
+      
+      if (isIncreasing) {
+        insights.push(`Your spending has been consistently increasing over the last 3 months.`);
+      } else if (isDecreasing) {
+        insights.push(`Your spending has been consistently decreasing over the last 3 months.`);
+      } else {
+        insights.push(`Your spending pattern has fluctuated over the last 3 months.`);
+      }
+    }
+    
+    // Category frequency
+    const mostFrequentCategory = Object.keys(categoryCount).reduce((a, b) => 
+      categoryCount[a] > categoryCount[b] ? a : b
+    );
+    
+    if (mostFrequentCategory !== topCategory) {
+      insights.push(`You make expenses in "${mostFrequentCategory}" most frequently, but spend more in total on "${topCategory}".`);
+    }
+    
+    // Return insights data
+    res.json({
+      totalSpent,
+      topCategory,
+      topCategoryPercentage,
+      avgTransactionSize: avgTransactionSize.toFixed(2),
+      monthOverMonthGrowth: monthOverMonthGrowth ? monthOverMonthGrowth.toFixed(1) : null,
+      insights
+    });
+    
+  } catch (error) {
+    console.error('Error generating expense insights:', error);
+    res.status(500).json({ error: 'Failed to generate expense insights' });
+  }
+});
+
 // Start server
 app.listen(PORT, () => {
   console.log(`Server running on port ${PORT}`);
 });
+
+

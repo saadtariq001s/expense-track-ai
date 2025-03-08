@@ -1,4 +1,4 @@
-// File: public/js/dashboard.js
+// Enhanced dashboard.js
 document.addEventListener('DOMContentLoaded', function() {
   // Initialize variables
   let expenses = [];
@@ -7,10 +7,37 @@ document.addEventListener('DOMContentLoaded', function() {
   
   // DOM elements
   const expenseForm = document.getElementById('expenseForm');
+  const quickExpenseForm = document.getElementById('quickExpenseForm');
+  const saveQuickExpense = document.getElementById('saveQuickExpense');
   const expensesTable = document.getElementById('expensesTable');
   const editExpenseModal = new bootstrap.Modal(document.getElementById('editExpenseModal'));
+  const quickAddModal = new bootstrap.Modal(document.getElementById('quickAddModal'));
   const editExpenseForm = document.getElementById('editExpenseForm');
   const saveExpenseChanges = document.getElementById('saveExpenseChanges');
+  
+  // Initialize tooltips and popovers if they exist
+  if (typeof bootstrap.Tooltip !== 'undefined') {
+    const tooltipTriggerList = [].slice.call(document.querySelectorAll('[data-bs-toggle="tooltip"]'));
+    tooltipTriggerList.map(function (tooltipTriggerEl) {
+      return new bootstrap.Tooltip(tooltipTriggerEl);
+    });
+  }
+  
+  if (typeof bootstrap.Popover !== 'undefined') {
+    const popoverTriggerList = [].slice.call(document.querySelectorAll('[data-bs-toggle="popover"]'));
+    popoverTriggerList.map(function (popoverTriggerEl) {
+      return new bootstrap.Popover(popoverTriggerEl);
+    });
+  }
+  
+  // Set default date in forms
+  const todayStr = new Date().toISOString().split('T')[0];
+  if (document.getElementById('expenseDate')) {
+    document.getElementById('expenseDate').value = todayStr;
+  }
+  if (document.getElementById('quickDate')) {
+    document.getElementById('quickDate').value = todayStr;
+  }
   
   // Fetch expenses and update UI
   fetchExpenses();
@@ -19,9 +46,21 @@ document.addEventListener('DOMContentLoaded', function() {
   fetchInsights();
   
   // Event listeners
-  expenseForm.addEventListener('submit', handleAddExpense);
-  expensesTable.addEventListener('click', handleTableActions);
-  saveExpenseChanges.addEventListener('click', handleUpdateExpense);
+  if (expenseForm) {
+    expenseForm.addEventListener('submit', handleAddExpense);
+  }
+  
+  if (saveQuickExpense) {
+    saveQuickExpense.addEventListener('click', handleQuickAddExpense);
+  }
+  
+  if (expensesTable) {
+    expensesTable.addEventListener('click', handleTableActions);
+  }
+  
+  if (saveExpenseChanges) {
+    saveExpenseChanges.addEventListener('click', handleUpdateExpense);
+  }
   
   // Fetch all expenses from API
   async function fetchExpenses() {
@@ -72,70 +111,173 @@ document.addEventListener('DOMContentLoaded', function() {
       renderInsights(insights);
     } catch (error) {
       console.error('Error fetching insights:', error);
-      document.getElementById('spendingInsights').innerHTML = `
-        <div class="alert alert-warning" role="alert">
-          Could not load spending insights. Please try again later.
-        </div>
-      `;
+      if (document.getElementById('spendingInsights')) {
+        document.getElementById('spendingInsights').innerHTML = `
+          <div class="alert alert-warning" role="alert">
+            <i class="bi bi-exclamation-circle me-2"></i>
+            Could not load spending insights. Please try again later.
+          </div>
+        `;
+      }
     }
   }
   
-  // Render insights section
+  // Handle quick add expense
+  async function handleQuickAddExpense() {
+    const amount = document.getElementById('quickAmount').value;
+    const currency = document.getElementById('quickCurrency').value;
+    const description = document.getElementById('quickDescription').value;
+    const date = document.getElementById('quickDate').value || new Date().toISOString().split('T')[0];
+    const rawCategory = document.getElementById('quickCategory').value;
+    
+    if (!amount || !description) {
+      showAlert('Please fill in all required fields', 'warning');
+      return;
+    }
+    
+    try {
+      const response = await fetch('/api/expenses', {
+        method: 'POST',
+        headers: {
+          'Content-Type': 'application/json'
+        },
+        body: JSON.stringify({
+          amount,
+          currency,
+          description,
+          date,
+          rawCategory
+        })
+      });
+      
+      if (!response.ok) {
+        const errorText = await response.text();
+        throw new Error(`Failed to add expense: ${response.status} ${response.statusText} - ${errorText}`);
+      }
+      
+      const expense = await response.json();
+      console.log('Expense added successfully:', expense);
+      
+      // Add to beginning of array
+      expenses.unshift(expense);
+      
+      // Clear form
+      document.getElementById('quickExpenseForm').reset();
+      
+      // Close modal
+      quickAddModal.hide();
+      
+      // Update UI
+      renderExpensesTable();
+      fetchExpenseSummary();
+      fetchInsights();
+      showAlert('Expense added successfully!', 'success');
+    } catch (error) {
+      console.error('Error adding expense:', error);
+      showAlert('Could not add expense: ' + error.message, 'danger');
+    }
+  }
+  
+  // Render insights section with improved UI
   function renderInsights(insightsData) {
     const insightsContainer = document.getElementById('spendingInsights');
+    if (!insightsContainer) return;
     
     if (!insightsData.insights || insightsData.insights.length === 0) {
       insightsContainer.innerHTML = `
         <div class="alert alert-info" role="alert">
+          <i class="bi bi-info-circle me-2"></i>
           Add more expenses to see detailed spending insights!
         </div>
       `;
       return;
     }
     
+    // Format currency function
+    const formatCurrency = (value, currency = 'PKR') => {
+      return `${currency} ${parseFloat(value).toFixed(2)}`;
+    };
+    
+    // Main insight cards
     let insightsHtml = `
-      <div class="row mb-3">
-        <div class="col-md-4">
-          <div class="card bg-light h-100">
+      <div class="row mb-4">
+        <div class="col-md-4 mb-3">
+          <div class="card h-100 border-0">
             <div class="card-body text-center">
-              <h6 class="card-title">Total Spent</h6>
-              <p class="display-6">PKR ${parseFloat(insightsData.totalSpent).toFixed(2)}</p>
+              <div class="d-flex flex-column align-items-center">
+                <div class="rounded-circle bg-primary bg-opacity-10 p-3 mb-3">
+                  <i class="bi bi-cash-stack text-primary fs-3"></i>
+                </div>
+                <h6 class="text-muted mb-2">Total Spent</h6>
+                <h3 class="mb-0">${formatCurrency(insightsData.totalSpent)}</h3>
+              </div>
             </div>
           </div>
         </div>
-        <div class="col-md-4">
-          <div class="card bg-light h-100">
+        <div class="col-md-4 mb-3">
+          <div class="card h-100 border-0">
             <div class="card-body text-center">
-              <h6 class="card-title">Top Category</h6>
-              <p class="display-6">${insightsData.topCategory || 'N/A'}</p>
-              <p class="text-muted">${insightsData.topCategoryPercentage || 0}% of total</p>
+              <div class="d-flex flex-column align-items-center">
+                <div class="rounded-circle bg-info bg-opacity-10 p-3 mb-3">
+                  <i class="bi bi-tag text-info fs-3"></i>
+                </div>
+                <h6 class="text-muted mb-2">Top Category</h6>
+                <h3 class="mb-0">${insightsData.topCategory || 'N/A'}</h3>
+                <span class="badge bg-info mt-2">${insightsData.topCategoryPercentage || 0}% of total</span>
+              </div>
             </div>
           </div>
         </div>
-        <div class="col-md-4">
-          <div class="card bg-light h-100">
+        <div class="col-md-4 mb-3">
+          <div class="card h-100 border-0">
             <div class="card-body text-center">
-              <h6 class="card-title">Avg. Transaction</h6>
-              <p class="display-6">PKR ${insightsData.avgTransactionSize || 0}</p>
+              <div class="d-flex flex-column align-items-center">
+                <div class="rounded-circle bg-success bg-opacity-10 p-3 mb-3">
+                  <i class="bi bi-credit-card text-success fs-3"></i>
+                </div>
+                <h6 class="text-muted mb-2">Avg. Transaction</h6>
+                <h3 class="mb-0">${formatCurrency(insightsData.avgTransactionSize || 0)}</h3>
+              </div>
             </div>
           </div>
         </div>
       </div>
-      
-      <div class="card mb-3">
-        <div class="card-header">
-          <h6 class="mb-0">Key Insights</h6>
+    `;
+    
+    // Key insights section
+    insightsHtml += `
+      <div class="card border-0 mb-4">
+        <div class="card-header bg-transparent border-0">
+          <h6 class="mb-0"><i class="bi bi-lightbulb me-2"></i>Key Insights</h6>
         </div>
-        <div class="card-body">
-          <ul class="list-group list-group-flush">
+        <div class="card-body pt-0">
     `;
     
     insightsData.insights.forEach(insight => {
-      insightsHtml += `<li class="list-group-item">${insight}</li>`;
+      // Determine icon based on insight content
+      let icon = 'bi-graph-up';
+      
+      if (insight.includes('increased')) {
+        icon = 'bi-arrow-up-circle';
+      } else if (insight.includes('decreased')) {
+        icon = 'bi-arrow-down-circle';
+      } else if (insight.includes('category')) {
+        icon = 'bi-tag';
+      } else if (insight.includes('average')) {
+        icon = 'bi-calculator';
+      }
+      
+      insightsHtml += `
+        <div class="insight-item">
+          <i class="bi ${icon} insight-icon"></i>
+          <div>
+            <p class="mb-0">${insight}</p>
+          </div>
+        </div>
+      `;
     });
     
     insightsHtml += `
-          </ul>
         </div>
       </div>
     `;
@@ -144,17 +286,18 @@ document.addEventListener('DOMContentLoaded', function() {
     if (insightsData.monthOverMonthGrowth !== null) {
       const growthValue = parseFloat(insightsData.monthOverMonthGrowth);
       const isPositive = growthValue > 0;
-      const icon = isPositive ? 'bi-arrow-up-circle-fill text-danger' : 'bi-arrow-down-circle-fill text-success';
+      const icon = isPositive ? 'bi-arrow-up-circle-fill trend-up' : 'bi-arrow-down-circle-fill trend-down';
       const trend = isPositive ? 'increase' : 'decrease';
+      const trendClass = isPositive ? 'danger' : 'success';
       
       insightsHtml += `
-        <div class="card">
-          <div class="card-body d-flex align-items-center">
+        <div class="card border-0">
+          <div class="card-body d-flex align-items-center p-3">
             <i class="bi ${icon} fs-1 me-3"></i>
             <div>
               <h6 class="card-title">Month-over-Month Trend</h6>
               <p class="card-text">
-                Your spending shows a ${Math.abs(growthValue)}% ${trend} compared to last month.
+                Your spending shows a <span class="badge bg-${trendClass}">${Math.abs(growthValue)}%</span> ${trend} compared to last month.
               </p>
             </div>
           </div>
@@ -175,6 +318,11 @@ document.addEventListener('DOMContentLoaded', function() {
     const description = document.getElementById('description').value;
     const date = document.getElementById('expenseDate').value || new Date().toISOString().split('T')[0];
     const rawCategory = document.getElementById('rawCategory')?.value || '';
+    
+    if (!amount || !description) {
+      showAlert('Please fill in all required fields', 'warning');
+      return;
+    }
     
     try {
       console.log('Sending expense data:', { amount, currency, description, date, rawCategory });
@@ -206,6 +354,7 @@ document.addEventListener('DOMContentLoaded', function() {
       
       // Clear form
       expenseForm.reset();
+      document.getElementById('expenseDate').value = new Date().toISOString().split('T')[0];
       
       // Update UI
       renderExpensesTable();
@@ -243,7 +392,11 @@ document.addEventListener('DOMContentLoaded', function() {
       // Show modal
       editExpenseModal.show();
     } else if (target.classList.contains('delete-btn') || target.closest('.delete-btn')) {
-      if (confirm('Are you sure you want to delete this expense?')) {
+      // Show confirmation dialog with more details
+      const expenseDate = new Date(expense.date).toLocaleDateString();
+      const formattedAmount = `${expense.currency || 'PKR'} ${parseFloat(expense.amount).toFixed(2)}`;
+      
+      if (confirm(`Are you sure you want to delete this expense?\n\nDescription: ${expense.description}\nAmount: ${formattedAmount}\nDate: ${expenseDate}`)) {
         deleteExpense(expenseId);
       }
     }
@@ -257,6 +410,11 @@ document.addEventListener('DOMContentLoaded', function() {
     const description = document.getElementById('editDescription').value;
     const date = document.getElementById('editExpenseDate').value;
     const rawCategory = document.getElementById('editRawCategory')?.value || '';
+    
+    if (!amount || !description || !date) {
+      showAlert('Please fill in all required fields', 'warning');
+      return;
+    }
     
     try {
       const response = await fetch(`/api/expenses/${expenseId}`, {
@@ -287,8 +445,7 @@ document.addEventListener('DOMContentLoaded', function() {
       }
       
       // Hide modal
-      const editModal = bootstrap.Modal.getInstance(document.getElementById('editExpenseModal'));
-      editModal.hide();
+      editExpenseModal.hide();
       
       // Update UI
       renderExpensesTable();
@@ -327,7 +484,7 @@ document.addEventListener('DOMContentLoaded', function() {
     }
   }
   
-  // Render expenses table
+  // Render expenses table with improved UI
   function renderExpensesTable() {
     if (!expensesTable) {
       console.error('Expenses table element not found');
@@ -339,24 +496,74 @@ document.addEventListener('DOMContentLoaded', function() {
     if (expenses.length === 0) {
       expensesTable.innerHTML = `
         <tr>
-          <td colspan="5" class="text-center">No expenses found. Add your first expense!</td>
+          <td colspan="5" class="text-center py-4">
+            <div class="empty-state">
+              <i class="bi bi-receipt fs-1 text-muted mb-3"></i>
+              <p class="mb-0">No expenses found. Add your first expense!</p>
+            </div>
+          </td>
         </tr>
       `;
       return;
     }
     
-    expensesTable.innerHTML = expenses.map(expense => `
-      <tr data-id="${expense._id}">
-        <td>${new Date(expense.date).toLocaleDateString()}</td>
-        <td>${expense.description}</td>
-        <td><span class="badge bg-info">${expense.category || 'Other'}</span></td>
-        <td>${expense.currency || 'PKR'} ${parseFloat(expense.amount).toFixed(2)}</td>
-        <td>
-          <button class="btn btn-sm btn-outline-primary edit-btn"><i class="bi bi-pencil"></i></button>
-          <button class="btn btn-sm btn-outline-danger delete-btn"><i class="bi bi-trash"></i></button>
-        </td>
-      </tr>
-    `).join('');
+    expensesTable.innerHTML = expenses.map(expense => {
+      // Determine category badge color
+      let badgeClass = 'bg-info';
+      const category = expense.category || 'Other';
+      
+      switch(category.toLowerCase()) {
+        case 'food':
+          badgeClass = 'bg-success';
+          break;
+        case 'transportation':
+          badgeClass = 'bg-primary';
+          break;
+        case 'entertainment':
+          badgeClass = 'bg-warning';
+          break;
+        case 'shopping':
+          badgeClass = 'bg-danger';
+          break;
+        case 'utilities':
+          badgeClass = 'bg-secondary';
+          break;
+        case 'health':
+          badgeClass = 'bg-info';
+          break;
+        default:
+          badgeClass = 'bg-info';
+      }
+      
+      return `
+        <tr data-id="${expense._id}">
+          <td>${new Date(expense.date).toLocaleDateString()}</td>
+          <td>${expense.description}</td>
+          <td>
+            <span class="badge ${badgeClass}">
+              <i class="bi bi-tag me-1"></i>${category}
+            </span>
+          </td>
+          <td class="fw-semibold">${expense.currency || 'PKR'} ${parseFloat(expense.amount).toFixed(2)}</td>
+          <td>
+            <button class="btn btn-sm btn-outline-primary edit-btn" data-bs-toggle="tooltip" title="Edit">
+              <i class="bi bi-pencil"></i>
+            </button>
+            <button class="btn btn-sm btn-outline-danger delete-btn" data-bs-toggle="tooltip" title="Delete">
+              <i class="bi bi-trash"></i>
+            </button>
+          </td>
+        </tr>
+      `;
+    }).join('');
+    
+    // Reinitialize tooltips
+    if (typeof bootstrap.Tooltip !== 'undefined') {
+      const tooltips = [].slice.call(document.querySelectorAll('[data-bs-toggle="tooltip"]'));
+      tooltips.map(function (tooltipTriggerEl) {
+        return new bootstrap.Tooltip(tooltipTriggerEl);
+      });
+    }
   }
   
   // Render charts for expense visualization
@@ -379,34 +586,89 @@ document.addEventListener('DOMContentLoaded', function() {
     // Prepare data for category chart
     const categoryLabels = summary.map(item => item._id || 'Uncategorized');
     const categoryData = summary.map(item => item.total);
-    const categoryColors = generateColors(categoryLabels.length);
     
-    // Create or update category pie chart
+    // Enhanced color palette for better visualization
+    const categoryColors = [
+      'rgba(54, 162, 235, 0.8)',   // Blue
+      'rgba(255, 99, 132, 0.8)',   // Red
+      'rgba(75, 192, 192, 0.8)',   // Teal
+      'rgba(255, 206, 86, 0.8)',   // Yellow
+      'rgba(153, 102, 255, 0.8)',  // Purple
+      'rgba(255, 159, 64, 0.8)',   // Orange
+      'rgba(40, 167, 69, 0.8)',    // Green
+      'rgba(108, 117, 125, 0.8)'   // Gray
+    ];
+    
+    // If we need more colors than in our set, generate them
+    if (categoryLabels.length > categoryColors.length) {
+      for (let i = categoryColors.length; i < categoryLabels.length; i++) {
+        const r = Math.floor(Math.random() * 200);
+        const g = Math.floor(Math.random() * 200);
+        const b = Math.floor(Math.random() * 200);
+        categoryColors.push(`rgba(${r}, ${g}, ${b}, 0.8)`);
+      }
+    }
+    
+    // Create or update category pie chart with improved styling
     const categoryCtx = categoryChartElement.getContext('2d');
     if (categoryChart) {
       categoryChart.destroy();
     }
     
     categoryChart = new Chart(categoryCtx, {
-      type: 'pie',
+      type: 'doughnut',  // Changed to doughnut for better appearance
       data: {
         labels: categoryLabels,
         datasets: [{
           data: categoryData,
           backgroundColor: categoryColors,
-          borderWidth: 1
+          borderColor: 'white',
+          borderWidth: 2,
+          hoverBorderWidth: 3,
+          hoverBackgroundColor: categoryColors.map(color => color.replace('0.8', '1')),
+          hoverBorderColor: 'white'
         }]
       },
       options: {
         responsive: true,
+        maintainAspectRatio: false,
         plugins: {
           legend: {
-            position: 'bottom'
+            position: 'bottom',
+            labels: {
+              padding: 15,
+              usePointStyle: true,
+              pointStyle: 'circle'
+            }
           },
           title: {
             display: true,
-            text: 'Expenses by Category'
+            text: 'Expenses by Category',
+            font: {
+              size: 16,
+              weight: 'bold'
+            },
+            padding: {
+              top: 10,
+              bottom: 15
+            }
+          },
+          tooltip: {
+            callbacks: {
+              label: function(context) {
+                const total = context.dataset.data.reduce((sum, val) => sum + val, 0);
+                const percentage = Math.round((context.raw / total) * 100);
+                const label = context.label || '';
+                const value = context.formattedValue;
+                return `${label}: ${value} (${percentage}%)`;
+              }
+            }
           }
+        },
+        cutout: '60%',  // Doughnut hole size
+        animation: {
+          animateScale: true,
+          animateRotate: true
         }
       }
     });
@@ -414,7 +676,7 @@ document.addEventListener('DOMContentLoaded', function() {
     // Prepare data for monthly chart (last 6 months)
     const monthlyData = prepareMonthlyData();
     
-    // Create or update monthly bar chart
+    // Create or update monthly bar chart with improved styling
     const monthlyCtx = monthlyChartElement.getContext('2d');
     if (monthlyChart) {
       monthlyChart.destroy();
@@ -427,31 +689,71 @@ document.addEventListener('DOMContentLoaded', function() {
         datasets: [{
           label: 'Monthly Expenses',
           data: monthlyData.data,
-          backgroundColor: 'rgba(54, 162, 235, 0.6)',
+          backgroundColor: 'rgba(54, 162, 235, 0.7)',
           borderColor: 'rgba(54, 162, 235, 1)',
-          borderWidth: 1
+          borderWidth: 1,
+          borderRadius: 6,
+          hoverBackgroundColor: 'rgba(54, 162, 235, 0.9)',
+          maxBarThickness: 40
         }]
       },
       options: {
         responsive: true,
+        maintainAspectRatio: false,
         plugins: {
           legend: {
             display: false
           },
           title: {
             display: true,
-            text: 'Monthly Expenses'
+            text: 'Monthly Expenses',
+            font: {
+              size: 16,
+              weight: 'bold'
+            },
+            padding: {
+              top: 10,
+              bottom: 15
+            }
+          },
+          tooltip: {
+            callbacks: {
+              label: function(context) {
+                return `PKR ${context.formattedValue}`;
+              }
+            }
           }
         },
         scales: {
           y: {
             beginAtZero: true,
+            grid: {
+              display: true,
+              drawBorder: false,
+              color: 'rgba(200, 200, 200, 0.3)'
+            },
             ticks: {
               callback: function(value) {
+                if (value >= 1000) {
+                  return 'PKR ' + value / 1000 + 'k';
+                }
                 return 'PKR ' + value;
-              }
+              },
+              padding: 10
+            }
+          },
+          x: {
+            grid: {
+              display: false
+            },
+            ticks: {
+              padding: 10
             }
           }
+        },
+        animation: {
+          duration: 1500,
+          easing: 'easeOutQuart'
         }
       }
     });
@@ -486,41 +788,29 @@ document.addEventListener('DOMContentLoaded', function() {
     return { labels: months, data };
   }
   
-  // Generate colors for charts
-  function generateColors(count) {
-    const colorSet = [
-      'rgba(255, 99, 132, 0.8)',
-      'rgba(54, 162, 235, 0.8)',
-      'rgba(255, 206, 86, 0.8)',
-      'rgba(75, 192, 192, 0.8)',
-      'rgba(153, 102, 255, 0.8)',
-      'rgba(255, 159, 64, 0.8)',
-      'rgba(199, 199, 199, 0.8)',
-      'rgba(83, 102, 255, 0.8)',
-      'rgba(40, 159, 64, 0.8)',
-      'rgba(210, 199, 199, 0.8)'
-    ];
-    
-    // If we need more colors than in our set, generate them
-    if (count > colorSet.length) {
-      for (let i = colorSet.length; i < count; i++) {
-        const r = Math.floor(Math.random() * 255);
-        const g = Math.floor(Math.random() * 255);
-        const b = Math.floor(Math.random() * 255);
-        colorSet.push(`rgba(${r}, ${g}, ${b}, 0.8)`);
-      }
-    }
-    
-    return colorSet.slice(0, count);
-  }
-  
-  // Show alert message
+  // Show alert message with improved styling
   function showAlert(message, type = 'info') {
     // Create alert element
     const alertDiv = document.createElement('div');
-    alertDiv.className = `alert alert-${type} alert-dismissible fade show position-fixed top-0 end-0 m-3`;
+    alertDiv.className = `alert alert-${type} alert-dismissible fade show floating-alert`;
     alertDiv.setAttribute('role', 'alert');
+    
+    // Add appropriate icon based on alert type
+    let icon = 'bi-info-circle';
+    switch(type) {
+      case 'success':
+        icon = 'bi-check-circle';
+        break;
+      case 'danger':
+        icon = 'bi-exclamation-circle';
+        break;
+      case 'warning':
+        icon = 'bi-exclamation-triangle';
+        break;
+    }
+    
     alertDiv.innerHTML = `
+      <i class="bi ${icon} me-2"></i>
       ${message}
       <button type="button" class="btn-close" data-bs-dismiss="alert" aria-label="Close"></button>
     `;
@@ -530,7 +820,15 @@ document.addEventListener('DOMContentLoaded', function() {
     
     // Remove after 5 seconds
     setTimeout(() => {
-      alertDiv.remove();
+      if (alertDiv.parentNode) {
+        // Add fade out animation
+        alertDiv.classList.add('fade-out');
+        setTimeout(() => {
+          if (alertDiv.parentNode) {
+            alertDiv.remove();
+          }
+        }, 300);
+      }
     }, 5000);
   }
 });

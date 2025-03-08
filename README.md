@@ -56,18 +56,6 @@ GOOGLE_CLIENT_SECRET=your_google_client_secret
 GEMINI_API_KEY=your_gemini_api_key
 ```
 
-### Set up Google OAuth
-1. Go to the [Google Cloud Console](https://console.cloud.google.com/)
-2. Create a new project
-3. Navigate to **"APIs & Services" > "Credentials"**
-4. Create an OAuth 2.0 Client ID
-5. Add `http://localhost:3000/auth/google/callback` as an authorized redirect URI
-6. Copy the Client ID and Client Secret to your `.env` file
-
-### Set up Gemini API
-1. Go to the [Google AI Studio](https://ai.google.dev/)
-2. Create or use an existing API key
-3. Copy the API key to your `.env` file
 
 ### Start the application
 ```sh
